@@ -258,10 +258,6 @@ def main():
     translator_status = "✅ Available" if translator else "❌ Unavailable"
     st.success(f"Model loaded! ({label_info}) | Dictionary: {dict_size:,} words | Translation: {translator_status}")
 
-    if id2label:
-        with st.expander("Model Labels", expanded=False):
-            st.json(id2label)
-
     # File uploader
     st.subheader("Upload Text File")
     uploaded_file = st.file_uploader(
@@ -361,26 +357,16 @@ def main():
                 # Display table
                 df_data = []
                 for word_info in filtered_unknown:
-                    word = word_info['word']
                     df_data.append({
-                        'Word': word,
+                        'Word': word_info['word'],
                         'Spanish Translation': word_info.get('spanish_translation', '[Translation unavailable]'),
-                        'Source': word_info.get('source', 'N/A'),
-                        'Dict Label': 'Known (1)' if word_info.get('dict_label') == 1 else ('Unknown (0)' if word_info.get('dict_label') == 0 else 'Not in dict'),
-                        'Model Class': f"LABEL_{word_info['class']}",
                         'Confidence': f"{word_info['confidence']:.2%}"
                     })
-
+                
                 df = pd.DataFrame(df_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
-                # Download translations
-                st.download_button(
-                    label="📥 Download Translations",
-                    data=pd.DataFrame(df_data).to_csv(index=False),
-                    file_name="translations.csv",
-                    mime="text/csv"
-                )
+
             else:
                 st.info("No unknown words found (or all below confidence threshold).")
 
@@ -423,8 +409,7 @@ def main():
         - Confidence scores
         - Highlighted unknown words
         - Spanish translations
-        - Export to CSV
-        
+
         **Label System:**
         - **0** = Unknown word (needs translation)
         - **1** = Known word (you know this)
