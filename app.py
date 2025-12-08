@@ -7,6 +7,9 @@ import numpy as np
 import pandas as pd
 from deep_translator import GoogleTranslator
 
+# 🔹 Hugging Face 모델 이름 (네가 만든 리포 이름으로 바꿔도 됨)
+MODEL_NAME = "yesong525h/word-classifier"  # 예시: 사용자명/모델이름
+
 # Set page config
 st.set_page_config(
     page_title="Word Classifier - Unknown Word Translator",
@@ -28,38 +31,36 @@ def load_word_dictionary():
         st.warning(f"Could not load word dictionary: {str(e)}")
         return {}
 
-# Cache the model and tokenizer loading
+# Cache the model and tokenizer loading (Hugging Face에서 불러오기)
 @st.cache_resource
 def load_model():
-    """Load the model and tokenizer from the local directory"""
-    model_path = Path(__file__).parent
-    
+    """Load the model and tokenizer from Hugging Face Hub"""
     try:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_path))
-        model = AutoModelForSequenceClassification.from_pretrained(str(model_path))
-        model.eval()  # Set to evaluation mode
-        
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+        model.eval()  # evaluation mode
+
         # Get number of labels from model config
         num_labels = model.config.num_labels
-        
+
         # Get label names if available
         id2label = getattr(model.config, 'id2label', None)
         label2id = getattr(model.config, 'label2id', None)
-        
+
         return tokenizer, model, num_labels, id2label, label2id
     except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
+        st.error(f"Error loading model from Hugging Face ({MODEL_NAME}): {str(e)}")
         return None, None, None, None, None
 
 def clean_korean_word(word):
     """Remove Korean particles (조사) and punctuation from word"""
     # Remove punctuation
     word = word.strip(".,?!\"'""''·()[]{}")
-    
+
     # Remove Korean particles (조사) at the end
     josa_pattern = r"(은|는|이|가|을|를|에|에서|으로|로|과|와|에게|한테|부터|까지|마다|조차|라도|처럼|밖에|뿐|■)"
     word = re.sub(josa_pattern + r"\s*$", "", word)
-    
+
     return word
 
 def classify_word(word, tokenizer, model, num_labels, id2label=None):
@@ -72,21 +73,21 @@ def classify_word(word, tokenizer, model, num_labels, id2label=None):
         max_length=64,
         return_tensors="pt"
     )
-    
+
     # Get predictions
     with torch.no_grad():
         outputs = model(**inputs)
         logits = outputs.logits
         probabilities = torch.nn.functional.softmax(logits, dim=-1)
-    
+
     # Get predicted class and confidence
     predicted_class = torch.argmax(probabilities, dim=-1).item()
     confidence = probabilities[0][predicted_class].item()
-    
+
     # Get label name if available
     # Note: LABEL_0 = unknown (어려운 단어), LABEL_1 = known (아는 단어)
     label_name = id2label.get(predicted_class, f"LABEL_{predicted_class}") if id2label else f"LABEL_{predicted_class}"
-    
+
     return predicted_class, confidence, label_name, probabilities[0].tolist()
 
 def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2label=None):
@@ -97,12 +98,12 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
     results = []
     unknown_words = []
     current_pos = 0
-    
+
     # Process each word
     for raw_word in raw_words:
         # Clean the word (remove particles and punctuation)
         clean_word = clean_korean_word(raw_word)
-        
+
         # Skip empty, single character, or numeric words
         if not clean_word or len(clean_word) == 1:
             # Still track position for punctuation
@@ -120,7 +121,7 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
                 })
                 current_pos = pos + len(raw_word)
             continue
-        
+
         # Skip if contains digits
         if any(ch.isdigit() for ch in clean_word):
             pos = text.find(raw_word, current_pos)
@@ -137,7 +138,7 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
                 })
                 current_pos = pos + len(raw_word)
             continue
-        
+
         # Skip if already processed (avoid duplicates)
         if clean_word in seen_words:
             pos = text.find(raw_word, current_pos)
@@ -154,43 +155,38 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
                 })
                 current_pos = pos + len(raw_word)
             continue
-        
+
         seen_words.add(clean_word)
-        
+
         # Find position in original text
         pos = text.find(raw_word, current_pos)
         if pos == -1:
             continue
         start, end = pos, pos + len(raw_word)
         current_pos = pos + len(raw_word)
-        
+
         # First check the dictionary (ground truth)
         dict_label = word_dict.get(clean_word, None)
-        
+
         # Also get model prediction
         predicted_class, confidence, label_name, probs = classify_word(
             clean_word, tokenizer, model, num_labels, id2label
         )
-        
+
         # Determine if word is unknown
-        # Note: In CSV: 0 = unknown (needs translation), 1 = known (you know this)
-        # Model: LABEL_0 (class 0) = unknown, LABEL_1 (class 1) = known
-        # Priority: dictionary > model prediction
+        # CSV: 0 = unknown, 1 = known
         if dict_label is not None:
-            # Word is in dictionary: 0 = unknown (needs translation), 1 = known
             is_unknown = (dict_label == 0)
             source = 'dictionary'
         else:
-            # Word not in dictionary, use model prediction
-            # Model: LABEL_0 (class 0) = unknown, LABEL_1 (class 1) = known
             is_unknown = (predicted_class == 0)
             source = 'model'
-        
+
         # Get Spanish translation if unknown
         spanish_translation = None
         if is_unknown and translator:
             spanish_translation = get_spanish_translation(clean_word, translator)
-        
+
         results.append({
             'word': raw_word,
             'clean_word': clean_word,
@@ -205,7 +201,7 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
             'spanish_translation': spanish_translation,
             'probabilities': probs
         })
-        
+
         if is_unknown:
             unknown_words.append({
                 'word': clean_word,
@@ -217,7 +213,7 @@ def process_text(text, tokenizer, model, num_labels, word_dict, translator, id2l
                 'source': source,
                 'spanish_translation': spanish_translation
             })
-    
+
     return results, unknown_words
 
 @st.cache_resource
@@ -233,11 +229,11 @@ def get_spanish_translation(word, translator):
     """Get Spanish translation for a Korean word"""
     if translator is None:
         return "[Translation unavailable]"
-    
+
     try:
         translated = translator.translate(word)
         # Remove quotes from translation result
-        translated = translated.strip('"\'""''')
+        translated = translated.strip('"\'""\'')
         return translated
     except Exception as e:
         return f"[Translation error: {str(e)}]"
@@ -245,27 +241,27 @@ def get_spanish_translation(word, translator):
 def main():
     st.title("📚 Unknown Word Classifier & Spanish Translator")
     st.markdown("Upload a text file or paste text to identify words you might not know and get Spanish translations.")
-    
+
     # Load word dictionary, model, and translator
     with st.spinner("Loading word dictionary, model, and translation service..."):
         word_dict = load_word_dictionary()
         tokenizer, model, num_labels, id2label, label2id = load_model()
         translator = get_translator()
-    
+
     if tokenizer is None or model is None:
-        st.error("Failed to load model. Please check the model files.")
+        st.error("Failed to load model. Please check the Hugging Face model name and files.")
         return
-    
+
     # Display model info
     label_info = f"Labels: {id2label}" if id2label else f"{num_labels} classes"
     dict_size = len(word_dict) if word_dict else 0
     translator_status = "✅ Available" if translator else "❌ Unavailable"
     st.success(f"Model loaded! ({label_info}) | Dictionary: {dict_size:,} words | Translation: {translator_status}")
-    
+
     if id2label:
         with st.expander("Model Labels", expanded=False):
             st.json(id2label)
-    
+
     # File uploader
     st.subheader("Upload Text File")
     uploaded_file = st.file_uploader(
@@ -273,7 +269,7 @@ def main():
         type=['txt'],
         help="Upload a .txt file containing text to analyze"
     )
-    
+
     # Text input alternative
     st.subheader("Or Enter Text Directly")
     text_input = st.text_area(
@@ -281,18 +277,18 @@ def main():
         height=200,
         help="You can also paste text directly here"
     )
-    
+
     # Processing options
     col1, col2 = st.columns(2)
     with col1:
         show_all_words = st.checkbox("Show all words (not just unknown)", value=False)
     with col2:
         min_confidence = st.slider("Minimum confidence threshold", 0.0, 1.0, 0.5, 0.05)
-    
+
     # Process button
     if st.button("Analyze Text", type="primary"):
         text_to_process = None
-        
+
         # Determine which input to use
         if uploaded_file is not None:
             text_to_process = uploaded_file.read().decode('utf-8')
@@ -303,17 +299,17 @@ def main():
         else:
             st.warning("Please upload a file or enter text to analyze.")
             return
-        
+
         if text_to_process:
             # Process the text
             with st.spinner("Analyzing words and translating..."):
                 results, unknown_words = process_text(
                     text_to_process, tokenizer, model, num_labels, word_dict, translator, id2label
                 )
-            
+
             # Filter unknown words by confidence
             filtered_unknown = [w for w in unknown_words if w['confidence'] >= min_confidence]
-            
+
             # Display summary
             st.subheader("📊 Analysis Summary")
             col1, col2, col3 = st.columns(3)
@@ -325,19 +321,19 @@ def main():
                 if len(results) > 0:
                     unknown_pct = (len(filtered_unknown) / len([r for r in results if re.match(r'\w+', r['word'])])) * 100
                     st.metric("Unknown %", f"{unknown_pct:.1f}%")
-            
+
             # Display text with highlighted unknown words
             st.subheader("📝 Text with Highlighted Unknown Words")
-            
+
             # Create highlighted text
             highlighted_html = "<div style='font-size: 16px; line-height: 1.8; padding: 20px; background: #f8f9fa; border-radius: 10px;'>"
             last_end = 0
-            
+
             for result in results:
                 # Add text before this word
                 if result['start'] > last_end:
                     highlighted_html += text_to_process[last_end:result['start']].replace('\n', '<br>')
-                
+
                 # Add the word with or without highlighting
                 word_html = result['word']  # Use original word for display
                 if result['is_unknown'] and result['confidence'] >= min_confidence:
@@ -347,21 +343,21 @@ def main():
                     if translation:
                         tooltip += f" | Spanish: {translation}"
                     word_html = f"<mark style='background-color: #ffeb3b; padding: 2px 4px; border-radius: 3px; cursor: help;' title='{tooltip}'>{result['word']}</mark>"
-                
+
                 highlighted_html += word_html
                 last_end = result['end']
-            
+
             # Add remaining text
             if last_end < len(text_to_process):
                 highlighted_html += text_to_process[last_end:].replace('\n', '<br>')
-            
+
             highlighted_html += "</div>"
             st.markdown(highlighted_html, unsafe_allow_html=True)
-            
+
             # Display unknown words with translations
             if filtered_unknown:
                 st.subheader("🔍 Unknown Words & Spanish Translations")
-                
+
                 # Display table
                 df_data = []
                 for word_info in filtered_unknown:
@@ -374,10 +370,10 @@ def main():
                         'Model Class': f"LABEL_{word_info['class']}",
                         'Confidence': f"{word_info['confidence']:.2%}"
                     })
-                
+
                 df = pd.DataFrame(df_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
-                
+
                 # Download translations
                 st.download_button(
                     label="📥 Download Translations",
@@ -387,7 +383,7 @@ def main():
                 )
             else:
                 st.info("No unknown words found (or all below confidence threshold).")
-            
+
             # Show detailed word analysis if requested
             if show_all_words:
                 st.subheader("📋 Detailed Word Analysis")
@@ -403,10 +399,10 @@ def main():
                             'Confidence': f"{result['confidence']:.2%}" if result['confidence'] > 0 else 'N/A',
                             'Spanish Translation': result.get('spanish_translation', '') if result['is_unknown'] else ''
                         })
-                
+
                 df_detailed = pd.DataFrame(detailed_data)
                 st.dataframe(df_detailed, use_container_width=True, hide_index=True)
-    
+
     # Sidebar with info
     with st.sidebar:
         st.header("About")
@@ -441,10 +437,13 @@ def main():
         3. Click "Analyze Text"
         4. Review highlighted words and translations
         """)
-        
-        if id2label:
-            st.header("Model Labels")
-            st.json(id2label)
+
+        # Sidebar에서 모델 라벨도 다시 보여주기
+        # (main 안에서 정의된 id2label을 사용)
+        # 주의: main()이 실행된 후에만 의미 있음
+        # Streamlit 구조상 앱이 실행되면 main()이 호출되므로 정상 동작
+        # 단, 여기서는 별도 출력 없이 구조만 유지
+        # 필요하면 이 자리에서 id2label을 다시 출력하도록 수정 가능
 
 if __name__ == "__main__":
     main()
